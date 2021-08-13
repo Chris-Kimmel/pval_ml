@@ -89,6 +89,11 @@ idx = pd.IndexSlice
 
 from sklearn import model_selection, svm, metrics
 
+try:
+    from tqdm import tqdm
+except ModuleNotFoundError:
+    tqdm = lambda x: x
+
 
 NUMBER_OF_FOLDS = 5
 
@@ -220,13 +225,9 @@ for model in TRAINING_PAIR_LIST:
 ######################## Import datasets for evaluation ########################
 ################################################################################
 
-features = pd.DataFrame( # previously named "sites"
-    data=product(
-        SITES_TO_EVALUATE_0B,
-        range(RANGE_OF_BASES_TO_INCLUDE[0], RANGE_OF_BASES_TO_INCLUDE[1]+1),
-    ),
-    columns=['prediction_site_0b', 'delta'],
-).assign(pos_0b=lambda x: x['prediction_site_0b'] + x['delta'])
+################################################################################
+################### Train models using ALL the training data ###################
+################################################################################
 
 # Each of the possible values of `delta` corresponds to a feature used by the
 # model. The presence of (`pos_0b`, `prediction_site_0b`, `delta`) in the `features`
@@ -239,24 +240,6 @@ evaluation_dset_long = pd.concat(
 )
 # columns: are 'read_id', 'pos_0b', 'pval', 'dset'
 # no index
-
-on_which_to_run_model = (
-    evaluation_dset_long
-    .merge(features, how='inner', on='pos_0b', validate='many_to_many')
-    .pivot(
-        index=['dset', 'read_id', 'prediction_site_0b'],
-        columns='delta',
-        values='pval'
-    ).dropna()
-)
-# Signature of on_which_to_run_model:
-# Index: dset, read_id, prediction_site_0b
-# Columns: -4, -3, -2, -1, 0, 1
-
-
-################################################################################
-################### Train models using ALL the training data ###################
-################################################################################
 
 to_concat = []
 for model in TRAINING_PAIR_LIST:
@@ -276,18 +259,9 @@ for model in TRAINING_PAIR_LIST:
     X = np.concatenate([pos_X, neg_X], axis=0)
     y = np.concatenate([np.full((n_pos,), 1), np.full((n_neg,), 0)], axis=0)
 
-    ### train model and run on evaluation data ###
+    ### train model ###
 
     classifier.fit(X, y)
-
-    to_concat.append(
-        pd.DataFrame(
-            data=classifier.predict(on_which_to_run_model),
-            index=on_which_to_run_model.index,
-            columns=['predicted']
-        ).assign(model=model_nick)
-        .reset_index()
-    )
 
     ### save model parameters ###
 
@@ -296,6 +270,43 @@ for model in TRAINING_PAIR_LIST:
         print(f'classifier coefficients:\t{classifier.coef_}', file=f)
         print(f'classifier intercept:\t\t{classifier.intercept_}', file=f)
         print('---', file=f)
+
+    ### run model on evaluation data ###
+
+    for site_0b in tqdm(SITES_TO_EVALUATE_0B):
+
+        features = pd.DataFrame(
+            data=product(
+                [site_0b], # sorry; this is part of a quick hack
+                range(RANGE_OF_BASES_TO_INCLUDE[0], RANGE_OF_BASES_TO_INCLUDE[1]+1),
+            ),
+            columns=['prediction_site_0b', 'delta'],
+        ).assign(pos_0b=lambda x: x['prediction_site_0b'] + x['delta'])
+
+        on_which_to_run_model = (
+            evaluation_dset_long
+            .merge(features, how='inner', on='pos_0b', validate='many_to_many')
+            .pivot(
+                index=['dset', 'read_id', 'prediction_site_0b'],
+                columns='delta',
+                values='pval'
+            ).dropna()
+        )
+        # Signature of on_which_to_run_model:
+        # Index: dset, read_id, prediction_site_0b
+        # Columns: -4, -3, -2, -1, 0, 1
+
+        # When site_0b is on the extreme 5' or 3' end of the data, the dataframe
+        # on_which_to_run_model has too few columns, and the IF statement is False
+        if on_which_to_run_model.shape[1] == RANGE_OF_BASES_TO_INCLUDE[1] - RANGE_OF_BASES_TO_INCLUDE[0] + 1:
+            to_concat.append(
+                pd.DataFrame(
+                    data=classifier.predict(on_which_to_run_model),
+                    index=on_which_to_run_model.index,
+                    columns=['predicted']
+                ).assign(model=model_nick)
+                .reset_index()
+            )
 
 predictions = pd.concat(to_concat, axis=0)
 del to_concat

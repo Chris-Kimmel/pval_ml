@@ -120,6 +120,58 @@ def longify(df):
     return df.stack().rename('pval').reset_index()
 
 
+class dataset():
+    '''
+    An object of this class stands for the p-values of a single p-value CSV
+    file. (Such files are produced by prsconv2.py and prsconv3.)
+    '''
+
+    def __init__(self, filepath):
+        '''
+        Here filepath points to a per-read statistics file as output by prsconv2
+        or prsconv3
+        '''
+        self._data = load_csv(filepath)
+
+        # Fill in gaps in missing positions
+        present_cols = self._data.columns
+        min_pos, max_pos = min(present_cols), max(present_cols)
+        missing_poss = set(range(min_pos, max_pos+1)) - set(self._data.columns) 
+        missing_pos_df = pd.DataFrame({p: np.nan} for p in missing_poss)
+        self._data = pd.concat([self._data, missing_pos_df], axis=1) # sorted automatically
+
+    def apply_model(self, linear_svc: smv.LinearSVC, r)
+        '''
+        Apply a linear support-vector machine to the dataset.
+
+        Arguments:
+            linear_svc:
+                A trained support-vector machine from sklearn. It is understood
+                that linear_svc is trained to determine whether a site is
+                methylated by using the p-values in its vicinity.
+            r:
+                A tuple of integers like (-4, 1) describing what the features
+                of linear_svc are. The left entry says how many bases upstream
+                are used by the model, and the right entry says how many bases
+                downstream.
+                    For instance, if r=(-4, 1), then to call the methylation
+                of nucleotide #7005, p-values at nucleotides #7001 through
+                #7006 are used.
+
+        Returns:
+            self._data, but with 0s, 1s, and NaNs representing methylation calls
+            at every site in the dataset
+        '''
+        assert len(linear_svc._coef) == r[1] - r[0] + 1, f'invalid r: {r}'
+        assert r[1] > r[0], f'invalid r: {r}'
+
+        v = sliding_window_view(self._data, r[1] - r[0] + 1, axis=1)
+        predictions = ((v @ linear_svc._coef.ravel()) > linear_svc._thresh) \
+            .reshape(self._data.shape)
+
+        return pd.DataFrame(predictions, columns=self._data.columns,
+            index=self._data.index)
+
 ################################################################################
 #################################### Setup #####################################
 ################################################################################

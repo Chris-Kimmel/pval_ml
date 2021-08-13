@@ -35,39 +35,37 @@ TRAINING_PAIR_LIST = [
 
 
 EVALUATION_DATASET_LIST = [
-    {'dset_prs_csv': '/fs/project/PAS1405/kimmel/data/fast5s/Native/Native_fishers0.csv',
-     'dset_nickname': 'Trizol',
-    },
     {'dset_prs_csv': '/fs/project/PAS1405/GabbyLee/project/m6A_modif/WT_cellular/23456_WT_cellular_fishers0.csv',
      'dset_nickname': 'WT_cellular',
     },
-    {'dset_prs_csv': '/fs/project/PAS1405/GabbyLee/project/m6A_modif/ctrl_data_set/data_Olivier/IVT_fishers0.csv',
-     'dset_nickname': 'IVT',
-    },
-    {'dset_prs_csv': '/fs/project/PAS1405/GabbyLee/project/m6A_modif/FTO_KO_cellular/FTO_KO_cellular_fishers0.csv',
-     'dset_nickname': 'FTO_KO',
-    },
-    {'dset_prs_csv': '/fs/project/PAS1405/GabbyLee/project/m6A_modif/ALKBH5_KO_cellular/061821_ALKBH5_KO_293T_Cellular_RNA/061821_ALKBH5_KO_cellular_len8K_fishers0.csv',
-     'dset_nickname': 'ALKBH5_KO_cellular_8K',
-    },
+#     {'dset_prs_csv': '/fs/project/PAS1405/kimmel/data/fast5s/Native/Native_fishers0.csv',
+#      'dset_nickname': 'Trizol',
+#     },
+#     {'dset_prs_csv': '/fs/project/PAS1405/GabbyLee/project/m6A_modif/ctrl_data_set/data_Olivier/IVT_fishers0.csv',
+#      'dset_nickname': 'IVT',
+#     },
+#     {'dset_prs_csv': '/fs/project/PAS1405/GabbyLee/project/m6A_modif/FTO_KO_cellular/FTO_KO_cellular_fishers0.csv',
+#      'dset_nickname': 'FTO_KO',
+#     },
+#     {'dset_prs_csv': '/fs/project/PAS1405/GabbyLee/project/m6A_modif/ALKBH5_KO_cellular/061821_ALKBH5_KO_293T_Cellular_RNA/061821_ALKBH5_KO_cellular_len8K_fishers0.csv',
+#      'dset_nickname': 'ALKBH5_KO_cellular_8K',
+#     },
 ]
 
-'''
-SITES_TO_EVALUATE_0B = [
-    8033, # 7
-    8078, # 1
-    8109, # 8
-    8716, # 2
-    8974, # 3
-    8988, # 4.1
-    8995, # 4.2
-    9096, # 6
-    9113, # 10
-    9119, # 6
-    9130, # 9
-]
-'''
-SITES_TO_EVALUATE_0B = list(range(0, 10**4))
+# SITES_TO_EVALUATE_0B = [
+#     8033, # 7
+#     8078, # 1
+#     8109, # 8
+#     8716, # 2
+#     8974, # 3
+#     8988, # 4.1
+#     8995, # 4.2
+#     9096, # 6
+#     9113, # 10
+#     9119, # 6
+#     9130, # 9
+# ]
+SITES_TO_EVALUATE_0B = list(range(0, 10**5))
 
 # RANGE_OF_BASES_TO_INCLUDE determines how many p-values are used for the model.
 # When it equals (-4, 1), the model uses 4 basepairs upstream and 1 basepair
@@ -241,7 +239,14 @@ evaluation_dset_long = pd.concat(
 # columns: are 'read_id', 'pos_0b', 'pval', 'dset'
 # no index
 
-to_concat = []
+evaluation_dset_wide = (
+    evaluation_dset_long
+    .pivot(index=['read_id', 'dset'], columns='pos_0b', values='pval')
+)
+
+prediction_dfs = []
+feature_and_label_dfs = []
+labels_to_concat = []
 for model in TRAINING_PAIR_LIST:
     model_nick = model['model_nickname']
     prediction_site_0b = model['model_site_0b']
@@ -275,47 +280,46 @@ for model in TRAINING_PAIR_LIST:
 
     for site_0b in tqdm(SITES_TO_EVALUATE_0B):
 
-        features = pd.DataFrame(
-            data=product(
-                [site_0b], # sorry; this is part of a quick hack
-                range(RANGE_OF_BASES_TO_INCLUDE[0], RANGE_OF_BASES_TO_INCLUDE[1]+1),
-            ),
-            columns=['prediction_site_0b', 'delta'],
-        ).assign(pos_0b=lambda x: x['prediction_site_0b'] + x['delta'])
+        lo = site_0b + RANGE_OF_BASES_TO_INCLUDE[0] # inclusive
+        hi = site_0b + RANGE_OF_BASES_TO_INCLUDE[1] # inclusive
 
-        on_which_to_run_model = (
-            evaluation_dset_long
-            .merge(features, how='inner', on='pos_0b', validate='many_to_many')
-            .pivot(
-                index=['dset', 'read_id', 'prediction_site_0b'],
-                columns='delta',
-                values='pval'
-            ).dropna()
-        )
-        # Signature of on_which_to_run_model:
-        # Index: dset, read_id, prediction_site_0b
-        # Columns: -4, -3, -2, -1, 0, 1
+        bases_to_include_relative = list(range(r[0], r[1]+1))
+        bases_to_include_absolute = list(range(lo, hi+1))
+        absolute_to_relative = {x: x-site_0b for x in range(lo, hi+1)}
 
-        # When site_0b is on the extreme 5' or 3' end of the data, the dataframe
-        # on_which_to_run_model has too few columns, and the IF statement is False
-        if on_which_to_run_model.shape[1] == RANGE_OF_BASES_TO_INCLUDE[1] - RANGE_OF_BASES_TO_INCLUDE[0] + 1:
-            to_concat.append(
-                pd.DataFrame(
-                    data=classifier.predict(on_which_to_run_model),
-                    index=on_which_to_run_model.index,
-                    columns=['predicted']
-                ).assign(model=model_nick)
+        if set(bases_to_include_absolute) <= set(evaluation_dset_wide.columns):
+            on_which_to_run_model = (
+                evaluation_dset_wide
+                .loc[:, bases_to_include_absolute]
+                .dropna()
                 .reset_index()
+                .assign(prediction_site_0b=site_0b)
+                .rename(absolute_to_relative, axis=1) # normalize column names
             )
 
-predictions = pd.concat(to_concat, axis=0)
-del to_concat
+            # Signature of on_which_to_run_model:
+            # Columns: dset, read_id, prediction_site_0b, -4, -3, -2, -1, 0, 1
+            # (no index)
+
+            prediction_dfs.append(classifier.predict(on_which_to_run_model.loc[:, bases_to_include_relative]), columns=['predicted'])
+            feature_and_label_dfs.append(
+                on_which_to_run_model.loc[:, ['dset', 'read_id', 'prediction_site_0b'] + list(range(r[0], r[1]+1))]
+            )
+            labels_to_concat.append(model_nick)
+
+# The code around these parts is optimized for speed
+predictions = (
+    pd.concat(
+        [pd.concat(feature_and_label_dfs, axis=0, keys=labels_to_concat, levels=['model', 'dummy_level']).droplevel('dummy_level').reset_index(),
+         pd.concat(prediction_dfs, axis=0)],
+        axis=1,
+    )
+)
+del feature_and_label_dfs, labels_to_concat, prediction_dfs
 # Columns of predictions are: dset, read_id, prediction_site_0b, model, predicted
 
 (
     predictions
-    .merge(on_which_to_run_model.reset_index(), how='inner', on=['dset', 'read_id', 'prediction_site_0b'], validate='many_to_one')
-    .loc[:, ['model', 'dset', 'read_id', 'prediction_site_0b', 'predicted'] + list(range(RANGE_OF_BASES_TO_INCLUDE[0], RANGE_OF_BASES_TO_INCLUDE[1] + 1))]
     .to_csv(path.join(OUTPUT_DIRECTORY, 'predictions.csv'), index=False)
 )
 

@@ -52,7 +52,7 @@ EVALUATION_DATASET_LIST = [
     },
 ]
 
-
+'''
 SITES_TO_EVALUATE_0B = [
     8033, # 7
     8078, # 1
@@ -66,7 +66,8 @@ SITES_TO_EVALUATE_0B = [
     9119, # 6
     9130, # 9
 ]
-
+'''
+SITES_TO_EVALUATE_0B = list(range(0, 10**4))
 
 # RANGE_OF_BASES_TO_INCLUDE determines how many p-values are used for the model.
 # When it equals (-4, 1), the model uses 4 basepairs upstream and 1 basepair

@@ -209,7 +209,7 @@ for model in TRAINING_PAIR_LIST:
 
     for train, test in folder.split(X, y):
         classifier.fit(X[train], y[train])
-        report = metrics.classification_report(y[test], classifier.predict(X[test]))
+        report = metrics.classification_report(y[test], classifier.predict(X[test]), digits=5)
         with open(path.join(OUTPUT_DIRECTORY, 'training_results.txt'), 'at') as f:
             print(report, file=f)
             print('---', file=f)
